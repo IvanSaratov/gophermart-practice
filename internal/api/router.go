@@ -3,12 +3,15 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
 	"go.uber.org/zap"
 )
+
+const readinessTimeout = 2 * time.Second
 
 // Проверяет готовность обязательных зависимостей обслуживать запросы.
 type ReadinessCheck func(context.Context) error
@@ -35,7 +38,11 @@ func health(w http.ResponseWriter, _ *http.Request) {
 // Возвращает HTTP-обработчик, отражающий готовность внешних зависимостей.
 func ready(logger *zap.Logger, readiness ReadinessCheck) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := readiness(r.Context()); err != nil {
+		// Ограничиваем контекст, чтобы зависимость могла прервать ожидание по deadline.
+		readinessCtx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
+		defer cancel()
+
+		if err := readiness(readinessCtx); err != nil {
 			logger.Warn("Readiness check failed", zap.Error(err))
 			writePlainText(w, http.StatusServiceUnavailable, "not ready\n")
 			return

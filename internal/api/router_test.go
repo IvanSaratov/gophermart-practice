@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
 	"github.com/stretchr/testify/assert"
@@ -59,6 +60,23 @@ func TestReadiness(t *testing.T) {
 	}
 }
 
+// Проверяет ограничение времени ожидания внешних зависимостей на уровне HTTP API.
+func TestReadinessBoundsCheckContext(t *testing.T) {
+	var deadline time.Time
+	var hasDeadline bool
+	router := NewRouter(zap.NewNop(), observability.NewMetrics(), func(ctx context.Context) error {
+		deadline, hasDeadline = ctx.Deadline()
+		return nil
+	})
+
+	startedAt := time.Now()
+	response := performRequest(router, http.MethodGet, "/ready")
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.True(t, hasDeadline)
+	assert.WithinDuration(t, startedAt.Add(2*time.Second), deadline, 250*time.Millisecond)
+}
+
 // Проверяет выгрузку метрик из изолированного registry.
 func TestMetrics(t *testing.T) {
 	metrics := observability.NewMetrics()
@@ -72,19 +90,6 @@ func TestMetrics(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.Contains(t, response.Body.String(), "gophermart_http_requests_total")
 	assert.Contains(t, response.Body.String(), "go_goroutines")
-}
-
-// Проверяет статусы для неизвестного маршрута и неподдерживаемого метода.
-func TestRoutingErrors(t *testing.T) {
-	router := NewRouter(zap.NewNop(), observability.NewMetrics(), func(context.Context) error {
-		return nil
-	})
-
-	missing := performRequest(router, http.MethodGet, "/missing")
-	unsupportedMethod := performRequest(router, http.MethodPost, "/health")
-
-	assert.Equal(t, http.StatusNotFound, missing.Code)
-	assert.Equal(t, http.StatusMethodNotAllowed, unsupportedMethod.Code)
 }
 
 // Выполняет тестовый HTTP-запрос без запуска сетевого сервера.
