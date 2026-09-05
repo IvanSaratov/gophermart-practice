@@ -9,7 +9,10 @@
 
 ## Запуск
 
+Параметр PostgreSQL обязателен.
+
 ```sh
+DATABASE_URI='postgresql://gophermart:gophermart@localhost:5432/gophermart?sslmode=disable' \
 go run ./cmd/gophermart
 ```
 
@@ -28,6 +31,16 @@ go run ./cmd/gophermart
 - `GET /metrics` — метрики в формате Prometheus.
 
 ## Проверка
+
+Запустить Compose:
+
+```sh
+docker compose -f infra/compose.yaml up --build -d
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+```
+
+Статические проверки:
 
 ```sh
 go test -race ./...
