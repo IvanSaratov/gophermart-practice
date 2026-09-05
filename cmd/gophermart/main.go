@@ -103,6 +103,7 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.runAddress, err)
 	}
+	// Можно было бы сделать короче - но линтер ругается.
 	defer func() { _ = listener.Close() }()
 
 	logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
