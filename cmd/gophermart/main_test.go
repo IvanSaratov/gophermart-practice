@@ -25,7 +25,11 @@ func TestCommandConfiguration(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			want: runtimeConfig{runAddress: "localhost:8080"},
+			args: []string{"-d", "postgres://required"},
+			want: runtimeConfig{
+				runAddress:  "localhost:8080",
+				databaseURI: "postgres://required",
+			},
 		},
 		{
 			name: "environment",
@@ -86,6 +90,24 @@ func TestCommandConfiguration(t *testing.T) {
 	}
 }
 
+// Проверяет остановку CLI до запуска приложения без обязательного адреса базы.
+func TestCommandRequiresDatabaseURI(t *testing.T) {
+	for _, key := range []string{"RUN_ADDRESS", "DATABASE_URI", "ACCRUAL_SYSTEM_ADDRESS"} {
+		unsetEnv(t, key)
+	}
+
+	called := false
+	command := newCommand(func(context.Context, runtimeConfig) error {
+		called = true
+		return nil
+	})
+
+	err := command.Run(context.Background(), []string{"gophermart"})
+
+	require.Error(t, err)
+	assert.False(t, called)
+}
+
 // Проверяет защитные таймауты HTTP-сервера.
 func TestHTTPServerTimeouts(t *testing.T) {
 	server := newHTTPServer(http.NotFoundHandler())
@@ -141,12 +163,17 @@ func TestServeReturnsListenerError(t *testing.T) {
 	assert.ErrorContains(t, err, "serve HTTP")
 }
 
-// Проверяет диагностику ошибки создания TCP-listener.
-func TestRunServerReturnsListenError(t *testing.T) {
-	err := runServer(context.Background(), runtimeConfig{runAddress: "127.0.0.1:-1"}, zap.NewNop())
+// Проверяет валидацию PostgreSQL до попытки открыть TCP-listener.
+func TestRunServerValidatesDatabaseBeforeListener(t *testing.T) {
+	const password = "top-secret-password"
+	err := runServer(context.Background(), runtimeConfig{
+		runAddress:  "127.0.0.1:-1",
+		databaseURI: "postgres://gophermart:" + password + "@localhost:not-a-port/gophermart",
+	}, zap.NewNop())
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "listen")
+	assert.ErrorContains(t, err, "open database")
+	assert.NotContains(t, err.Error(), password)
 }
 
 // Проверяет ненулевой код завершения при неверном CLI-вызове.

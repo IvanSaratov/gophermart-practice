@@ -13,11 +13,16 @@ import (
 
 	"github.com/ivansaratov/gophermart-practice/internal/api"
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
+	"github.com/ivansaratov/gophermart-practice/internal/store"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 )
 
-const gracefulShutdownTimeout = 10 * time.Second
+// Пока хардкод.
+const (
+	gracefulShutdownTimeout = 10 * time.Second
+	databaseStartupTimeout  = 10 * time.Second
+)
 
 type runtimeConfig struct {
 	runAddress           string
@@ -71,9 +76,12 @@ func newCommand(action actionFunc) *cli.Command {
 				Sources: cli.EnvVars("RUN_ADDRESS"),
 			},
 			&cli.StringFlag{
-				Name:    "database-uri",
-				Aliases: []string{"d"},
-				Sources: cli.EnvVars("DATABASE_URI"),
+				Name:     "database-uri",
+				Aliases:  []string{"d"},
+				Usage:    "PostgreSQL connection URI",
+				Required: true,
+				Sources:  cli.EnvVars("DATABASE_URI"),
+				Config:   cli.StringConfig{TrimSpace: true},
 			},
 			&cli.StringFlag{
 				Name:    "accrual-system-address",
@@ -91,19 +99,27 @@ func newCommand(action actionFunc) *cli.Command {
 	}
 }
 
-// Собирает операционный API, открывает TCP-listener и запускает HTTP-сервер.
+// Подключает PostgreSQL, собирает операционный API и запускает HTTP-сервер.
 func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
+	startupCtx, cancelStartup := context.WithTimeout(ctx, databaseStartupTimeout)
+	database, err := store.Open(startupCtx, cfg.databaseURI)
+	cancelStartup()
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer database.Close()
+
+	logger.Info("Database connection established")
+
 	metrics := observability.NewMetrics()
-	handler := api.NewRouter(logger, metrics, func(context.Context) error {
-		return nil
-	})
+	handler := api.NewRouter(logger, metrics, database.Ping)
 	server := newHTTPServer(handler)
 
 	listener, err := net.Listen("tcp", cfg.runAddress)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.runAddress, err)
 	}
-	// Можно было бы сделать короче - но линтер ругается.
+	// Ошибка повторного закрытия не влияет на завершение, но ресурс должен освобождаться на всех путях возврата.
 	defer func() { _ = listener.Close() }()
 
 	logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
@@ -119,7 +135,7 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 func newHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{
 		Handler: handler,
-		// Пока хардкодим
+		// Ограничения защищают сервер от медленных или зависших клиентских соединений.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
