@@ -17,13 +17,13 @@ const readinessTimeout = 2 * time.Second
 type ReadinessCheck func(context.Context) error
 
 // Собирает операционные и пользовательские HTTP-маршруты с общими middleware.
-func NewRouter(logger *zap.Logger, metrics *observability.Metrics, readiness ReadinessCheck, authentication Authentication, orderUpload OrderUpload) http.Handler {
+func NewRouter(logger *zap.Logger, metrics *observability.Metrics, readiness ReadinessCheck, authentication Authentication, orders Orders) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(metrics.Middleware(logger))
 	router.Use(observability.Recoverer(logger))
 	authenticationAPI := authenticationHandlers{logger: logger, authentication: authentication}
-	orderAPI := orderHandlers{logger: logger, upload: orderUpload}
+	orderAPI := orderHandlers{logger: logger, orders: orders}
 
 	router.Get("/health", health)
 	router.Get("/ready", ready(logger, readiness))
@@ -32,6 +32,7 @@ func NewRouter(logger *zap.Logger, metrics *observability.Metrics, readiness Rea
 	router.Post("/api/user/login", authenticationAPI.login)
 	router.Group(func(router chi.Router) {
 		router.Use(RequireAuthentication(authentication))
+		router.Get("/api/user/orders", orderAPI.listOrders)
 		router.Post("/api/user/orders", orderAPI.uploadOrder)
 	})
 

@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"go.uber.org/zap"
@@ -12,14 +14,21 @@ import (
 
 const maxOrderBodySize = 64 << 10
 
-// Ограничивает HTTP-слой единственным сценарием загрузки заказа.
-type OrderUpload interface {
+// Ограничивает HTTP-слой пользовательскими сценариями работы с заказами.
+type Orders interface {
 	Upload(context.Context, int64, string) (order.UploadResult, error)
+	List(context.Context, int64) ([]order.Order, error)
 }
 
 type orderHandlers struct {
 	logger *zap.Logger
-	upload OrderUpload
+	orders Orders
+}
+
+type orderResponse struct {
+	Number     string       `json:"number"`
+	Status     order.Status `json:"status"`
+	UploadedAt time.Time    `json:"uploaded_at"`
 }
 
 // Принимает номер и переводит доменный результат в статус.
@@ -37,7 +46,7 @@ func (h orderHandlers) uploadOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.upload.Upload(r.Context(), userID, string(body))
+	result, err := h.orders.Upload(r.Context(), userID, string(body))
 	if err != nil {
 		switch {
 		case errors.Is(err, order.ErrInvalidFormat):
@@ -61,5 +70,41 @@ func (h orderHandlers) uploadOrder(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.logger.Error("Order upload returned unknown result", zap.Uint8("result", uint8(result)))
 		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// Отдаёт заказы владельца в JSON либо пустой ответ при отсутствии данных.
+func (h orderHandlers) listOrders(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserID(r.Context())
+	if !ok {
+		h.logger.Error("Authenticated request has no user ID")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	orders, err := h.orders.List(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("Order list failed", zap.Error(err))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if len(orders) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	response := make([]orderResponse, 0, len(orders))
+	for _, item := range orders {
+		response = append(response, orderResponse{
+			Number:     item.Number,
+			Status:     item.Status,
+			UploadedAt: item.UploadedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		// После начала записи статус изменить нельзя, но ошибка всё равно нужна в диагностике.
+		h.logger.Error("Write order list failed", zap.Error(err))
 	}
 }
