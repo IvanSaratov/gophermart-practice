@@ -45,6 +45,15 @@ curl \
   http://localhost:8080/api/user/login
 ```
 
+## Загрузка заказа
+
+```sh
+curl \
+  -H 'Content-Type: text/plain' \
+  --data-binary '12345678903' \
+  http://localhost:8080/api/user/orders
+```
+
 ## Операционные endpoints
 
 - `GET /health` — процесс запущен;
