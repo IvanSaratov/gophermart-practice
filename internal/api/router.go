@@ -16,16 +16,19 @@ const readinessTimeout = 2 * time.Second
 // Проверяет готовность обязательных зависимостей обслуживать запросы.
 type ReadinessCheck func(context.Context) error
 
-// Собирает HTTP-маршруты и middleware операционного API.
-func NewRouter(logger *zap.Logger, metrics *observability.Metrics, readiness ReadinessCheck) http.Handler {
+// Собирает операционные и пользовательские HTTP-маршруты с общими middleware.
+func NewRouter(logger *zap.Logger, metrics *observability.Metrics, readiness ReadinessCheck, authentication Authentication) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(metrics.Middleware(logger))
 	router.Use(observability.Recoverer(logger))
+	authenticationAPI := authenticationHandlers{logger: logger, authentication: authentication}
 
 	router.Get("/health", health)
 	router.Get("/ready", ready(logger, readiness))
 	router.Get("/metrics", metrics.Handler().ServeHTTP)
+	router.Post("/api/user/register", authenticationAPI.register)
+	router.Post("/api/user/login", authenticationAPI.login)
 
 	return router
 }
