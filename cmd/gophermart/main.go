@@ -127,10 +127,10 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 	if err != nil {
 		return fmt.Errorf("create authentication service: %w", err)
 	}
-	orderUpload := order.NewService(database)
+	orders := order.NewService(database)
 
 	metrics := observability.NewMetrics()
-	handler := api.NewRouter(logger, metrics, database.Ping, authentication, orderUpload)
+	handler := api.NewRouter(logger, metrics, database.Ping, authentication, orders)
 	server := newHTTPServer(handler)
 
 	listener, err := net.Listen("tcp", cfg.runAddress)
