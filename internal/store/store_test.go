@@ -6,7 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
@@ -49,7 +51,7 @@ func TestInitializeAppliesSchema(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(database.Close)
 
-			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE TABLE IF NOT EXISTS orders.*number_hash BYTEA PRIMARY KEY.*number TEXT NOT NULL.*user_id BIGINT NOT NULL REFERENCES users\(id\)`)
+			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE TABLE IF NOT EXISTS orders.*number_hash BYTEA PRIMARY KEY.*number TEXT NOT NULL.*user_id BIGINT NOT NULL REFERENCES users\(id\),.*status TEXT NOT NULL DEFAULT 'NEW'.*CHECK \(status IN \('NEW', 'PROCESSING', 'INVALID', 'PROCESSED'\)\).*uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE INDEX IF NOT EXISTS orders_user_uploaded_at_idx.*ON orders \(user_id, uploaded_at DESC\)`)
 			if tt.execErr != nil {
 				expected.WillReturnError(tt.execErr)
 			} else {
@@ -176,6 +178,92 @@ func TestCreateOrderPropagatesDatabaseErrors(t *testing.T) {
 
 			require.ErrorIs(t, err, databaseErr)
 			assert.ErrorContains(t, err, tt.wantDetail)
+			require.NoError(t, database.ExpectationsWereMet())
+		})
+	}
+}
+
+// Проверяет возврат только заказов пользователя в порядке от новых к старым.
+func TestUserOrdersReturnsNewestFirst(t *testing.T) {
+	newer := time.Date(2026, time.September, 6, 12, 1, 0, 0, time.UTC)
+	older := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		rows *pgxmock.Rows
+		want []order.Order
+	}{
+		{
+			name: "orders",
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
+				AddRow("12345678903", "PROCESSING", newer).
+				AddRow("9278923470", "NEW", older),
+			want: []order.Order{
+				{Number: "12345678903", Status: order.StatusProcessing, UploadedAt: newer},
+				{Number: "9278923470", Status: order.StatusNew, UploadedAt: older},
+			},
+		},
+		{
+			name: "empty",
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}),
+			want: []order.Order{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			t.Cleanup(database.Close)
+			database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+				WithArgs(int64(42)).
+				WillReturnRows(tt.rows)
+
+			got, err := (&Store{pool: database}).UserOrders(context.Background(), 42)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			require.NoError(t, database.ExpectationsWereMet())
+		})
+	}
+}
+
+// Проверяет ошибки начала запроса и последующей итерации по строкам.
+func TestUserOrdersPropagatesDatabaseErrors(t *testing.T) {
+	databaseErr := errors.New("database unavailable")
+	tests := []struct {
+		name   string
+		expect func(pgxmock.PgxPoolIface)
+	}{
+		{
+			name: "query",
+			expect: func(database pgxmock.PgxPoolIface) {
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+					WithArgs(int64(42)).
+					WillReturnError(databaseErr)
+			},
+		},
+		{
+			name: "iteration",
+			expect: func(database pgxmock.PgxPoolIface) {
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+					WithArgs(int64(42)).
+					WillReturnRows(pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
+						AddRow("12345678903", "NEW", time.Time{}).
+						RowError(0, databaseErr))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			t.Cleanup(database.Close)
+			tt.expect(database)
+
+			_, err = (&Store{pool: database}).UserOrders(context.Background(), 42)
+
+			require.ErrorIs(t, err, databaseErr)
 			require.NoError(t, database.ExpectationsWereMet())
 		})
 	}

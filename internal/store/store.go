@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,7 @@ var (
 type databasePool interface {
 	Ping(context.Context) error
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Close()
 }
@@ -147,4 +149,34 @@ func (s *Store) CreateOrder(ctx context.Context, userID int64, number string) (i
 	}
 
 	return ownerID, true, nil
+}
+
+// Возвращает заказы владельца от самых новых к самым старым.
+func (s *Store) UserOrders(ctx context.Context, userID int64) ([]order.Order, error) {
+	const query = `
+		SELECT number, status, uploaded_at
+		FROM orders
+		WHERE user_id = $1
+		ORDER BY uploaded_at DESC
+	`
+
+	rows, err := s.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query user orders: %w", err)
+	}
+	defer rows.Close()
+
+	orders := make([]order.Order, 0)
+	for rows.Next() {
+		var item order.Order
+		if err := rows.Scan(&item.Number, &item.Status, &item.UploadedAt); err != nil {
+			return nil, fmt.Errorf("scan user order: %w", err)
+		}
+		orders = append(orders, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user orders: %w", err)
+	}
+
+	return orders, nil
 }
