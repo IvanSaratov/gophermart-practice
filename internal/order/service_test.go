@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,10 @@ type orderStoreStub struct {
 	called  bool
 	userID  int64
 	number  string
+
+	listedOrders []Order
+	listErr      error
+	listUserID   int64
 }
 
 // Запоминает аргументы и возвращает настроенный результат хранилища.
@@ -24,6 +29,12 @@ func (s *orderStoreStub) CreateOrder(_ context.Context, userID int64, number str
 	s.userID = userID
 	s.number = number
 	return s.ownerID, s.created, s.err
+}
+
+// Запоминает пользователя и возвращает настроенный список заказов.
+func (s *orderStoreStub) UserOrders(_ context.Context, userID int64) ([]Order, error) {
+	s.listUserID = userID
+	return s.listedOrders, s.listErr
 }
 
 // Проверяет строгий цифровой формат до обращения к хранилищу.
@@ -104,4 +115,30 @@ func TestUploadPropagatesStoreError(t *testing.T) {
 
 	require.ErrorIs(t, err, storeErr)
 	assert.ErrorContains(t, err, "save order")
+}
+
+// Проверяет возврат списка нужного пользователя без изменения порядка и данных.
+func TestListReturnsUserOrders(t *testing.T) {
+	uploadedAt := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
+	orders := &orderStoreStub{listedOrders: []Order{
+		{Number: "12345678903", Status: StatusNew, UploadedAt: uploadedAt},
+	}}
+
+	got, err := NewService(orders).List(context.Background(), 42)
+
+	require.NoError(t, err)
+	assert.Equal(t, []Order{
+		{Number: "12345678903", Status: StatusNew, UploadedAt: uploadedAt},
+	}, got)
+	assert.Equal(t, int64(42), orders.listUserID)
+}
+
+// Проверяет добавление контекста без потери ошибки чтения хранилища.
+func TestListPropagatesStoreError(t *testing.T) {
+	storeErr := errors.New("database unavailable")
+
+	_, err := NewService(&orderStoreStub{listErr: storeErr}).List(context.Background(), 42)
+
+	require.ErrorIs(t, err, storeErr)
+	assert.ErrorContains(t, err, "load user orders")
 }

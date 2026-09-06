@@ -20,12 +20,13 @@ const (
 	UploadAlreadyOwned
 )
 
-// Ограничивает зависимость сервиса единственной операцией с заказами.
+// Ограничивает зависимость сервиса необходимыми операциями.
 type Store interface {
 	CreateOrder(context.Context, int64, string) (int64, bool, error)
+	UserOrders(context.Context, int64) ([]Order, error)
 }
 
-// Применяет правила загрузки заказа перед обращением к хранилищу.
+// Объединяет пользовательские сценарии работы с заказами.
 type Service struct {
 	orders Store
 }
@@ -56,6 +57,16 @@ func (s *Service) Upload(ctx context.Context, userID int64, number string) (Uplo
 	}
 
 	return UploadAlreadyOwned, nil
+}
+
+// Возвращает сохранённые заказы пользователя в порядке хранилища.
+func (s *Service) List(ctx context.Context, userID int64) ([]Order, error) {
+	orders, err := s.orders.UserOrders(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load user orders: %w", err)
+	}
+
+	return orders, nil
 }
 
 // Отклоняет пустые строки и любые символы кроме цифр.
