@@ -14,6 +14,7 @@ import (
 	"github.com/ivansaratov/gophermart-practice/internal/api"
 	"github.com/ivansaratov/gophermart-practice/internal/auth"
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
+	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/ivansaratov/gophermart-practice/internal/store"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -100,7 +101,7 @@ func newCommand(action actionFunc) *cli.Command {
 	}
 }
 
-// Подготавливает PostgreSQL и авторизацию, собирает API и запускает HTTP-сервер.
+// Подготавливает PostgreSQL, прикладные сервисы и запускает HTTP-сервер.
 func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
 	// Отложенный запуск если вдруг миграция не выполниться
 	startupCtx, cancelStartup := context.WithTimeout(ctx, databaseStartupTimeout)
@@ -126,9 +127,10 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 	if err != nil {
 		return fmt.Errorf("create authentication service: %w", err)
 	}
+	orderUpload := order.NewService(database)
 
 	metrics := observability.NewMetrics()
-	handler := api.NewRouter(logger, metrics, database.Ping, authentication)
+	handler := api.NewRouter(logger, metrics, database.Ping, authentication, orderUpload)
 	server := newHTTPServer(handler)
 
 	listener, err := net.Listen("tcp", cfg.runAddress)
