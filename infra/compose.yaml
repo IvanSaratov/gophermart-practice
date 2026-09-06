@@ -22,6 +22,7 @@ services:
     environment:
       RUN_ADDRESS: ":8080"
       DATABASE_URI: "postgresql://gophermart:gophermart@postgres:5432/gophermart?sslmode=disable"
+      JWT_SECRET: "${JWT_SECRET:-gophermart-development-secret-change-me}"
     depends_on:
       postgres:
         condition: service_healthy
