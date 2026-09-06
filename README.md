@@ -34,13 +34,11 @@ go run ./cmd/gophermart
 ## Авторизация
 
 ```sh
-curl \
-  -H 'Content-Type: application/json' \
+curl -H 'Content-Type: application/json' \
   -d '{"login":"foo","password":"bar"}' \
   http://localhost:8080/api/user/register
 
-curl \
-  -H 'Content-Type: application/json' \
+curl -H 'Content-Type: application/json' \
   -d '{"login":"foo","password":"bar"}' \
   http://localhost:8080/api/user/login
 ```
@@ -48,10 +46,15 @@ curl \
 ## Загрузка заказа
 
 ```sh
-curl \
-  -H 'Content-Type: text/plain' \
+curl -H 'Content-Type: text/plain' \
   --data-binary '12345678903' \
   http://localhost:8080/api/user/orders
+```
+
+## Список заказов
+
+```sh
+curl http://localhost:8080/api/user/orders
 ```
 
 ## Операционные endpoints
