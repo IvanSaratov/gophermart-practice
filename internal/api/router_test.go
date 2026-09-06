@@ -20,7 +20,7 @@ import (
 func TestHealth(t *testing.T) {
 	router := NewRouter(zap.NewNop(), observability.NewMetrics(), func(context.Context) error {
 		return nil
-	}, authenticationStub{})
+	}, authenticationStub{}, &orderUploadStub{})
 
 	response := performRequest(router, http.MethodGet, "/health")
 
@@ -47,7 +47,7 @@ func TestReadiness(t *testing.T) {
 			core, logs := observer.New(zapcore.WarnLevel)
 			router := NewRouter(zap.New(core), observability.NewMetrics(), func(context.Context) error {
 				return tt.checkErr
-			}, authenticationStub{})
+			}, authenticationStub{}, &orderUploadStub{})
 
 			response := performRequest(router, http.MethodGet, "/ready")
 
@@ -67,7 +67,7 @@ func TestReadinessBoundsCheckContext(t *testing.T) {
 	router := NewRouter(zap.NewNop(), observability.NewMetrics(), func(ctx context.Context) error {
 		deadline, hasDeadline = ctx.Deadline()
 		return nil
-	}, authenticationStub{})
+	}, authenticationStub{}, &orderUploadStub{})
 
 	startedAt := time.Now()
 	response := performRequest(router, http.MethodGet, "/ready")
@@ -82,7 +82,7 @@ func TestMetrics(t *testing.T) {
 	metrics := observability.NewMetrics()
 	router := NewRouter(zap.NewNop(), metrics, func(context.Context) error {
 		return nil
-	}, authenticationStub{})
+	}, authenticationStub{}, &orderUploadStub{})
 	performRequest(router, http.MethodGet, "/health")
 
 	response := performRequest(router, http.MethodGet, "/metrics")

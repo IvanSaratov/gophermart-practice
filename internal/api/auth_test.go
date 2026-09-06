@@ -192,9 +192,14 @@ func TestRequireAuthentication(t *testing.T) {
 
 // Собирает роутер с исправными операционными зависимостями для HTTP-тестов.
 func newTestRouter(authentication Authentication) http.Handler {
+	return newTestRouterWithOrders(authentication, &orderUploadStub{})
+}
+
+// Собирает роутер с заданной бизнес-логикой заказов для HTTP-тестов.
+func newTestRouterWithOrders(authentication Authentication, upload OrderUpload) http.Handler {
 	return NewRouter(zap.NewNop(), observability.NewMetrics(), func(context.Context) error {
 		return nil
-	}, authentication)
+	}, authentication, upload)
 }
 
 // Выполняет HTTP-запрос с указанным текстовым телом без открытия сокета.
