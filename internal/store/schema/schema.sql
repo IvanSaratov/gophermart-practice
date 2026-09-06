@@ -11,5 +11,11 @@ CREATE TABLE IF NOT EXISTS orders (
     -- нашел такую проблему при генерации тестов с большими числами
     number_hash BYTEA PRIMARY KEY,
     number TEXT NOT NULL,
-    user_id BIGINT NOT NULL REFERENCES users(id)
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'NEW'
+        CHECK (status IN ('NEW', 'PROCESSING', 'INVALID', 'PROCESSED')),
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS orders_user_uploaded_at_idx
+    ON orders (user_id, uploaded_at DESC);
