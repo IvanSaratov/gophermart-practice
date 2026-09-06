@@ -95,7 +95,8 @@ func (s *Store) CreateUser(ctx context.Context, login, passwordHash string) (int
 	return userID, true, nil
 }
 
-// Загружает идентификатор и хеш пароля, не считая отсутствие логина системной ошибкой.
+// Загружает идентификатор и хеш пароля, не считая отсутствие логина системной ошибкой,
+// так как мы не должны нашей системой сообщать что такой логин существует или нет.
 func (s *Store) UserCredentials(ctx context.Context, login string) (int64, string, bool, error) {
 	const query = `SELECT id, password_hash FROM users WHERE login = $1`
 
