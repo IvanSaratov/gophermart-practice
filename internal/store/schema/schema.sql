@@ -4,3 +4,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS orders (
+    number_hash BYTEA PRIMARY KEY,
+    number TEXT NOT NULL,
+    user_id BIGINT NOT NULL REFERENCES users(id)
+);
