@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -30,8 +32,8 @@ func TestOpenRejectsInvalidDatabaseURIWithoutExposingPassword(t *testing.T) {
 	assert.NotContains(t, err.Error(), databaseURI)
 }
 
-// Проверяет применение обязательной таблицы пользователей и передачу ошибки PostgreSQL.
-func TestInitializeAppliesUsersSchema(t *testing.T) {
+// Проверяет применение актуального снимка схемы и передачу ошибки PostgreSQL.
+func TestInitializeAppliesSchema(t *testing.T) {
 	tests := []struct {
 		name    string
 		execErr error
@@ -47,7 +49,7 @@ func TestInitializeAppliesUsersSchema(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(database.Close)
 
-			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)`)
+			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE TABLE IF NOT EXISTS orders.*number_hash BYTEA PRIMARY KEY.*number TEXT NOT NULL.*user_id BIGINT NOT NULL REFERENCES users\(id\)`)
 			if tt.execErr != nil {
 				expected.WillReturnError(tt.execErr)
 			} else {
@@ -62,6 +64,118 @@ func TestInitializeAppliesUsersSchema(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+			require.NoError(t, database.ExpectationsWereMet())
+		})
+	}
+}
+
+// Проверяет сохранение нового заказа и определение владельца уже существующего.
+func TestCreateOrderReportsOwnerAndWhetherInsertHappened(t *testing.T) {
+	t.Run("created", func(t *testing.T) {
+		database, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		t.Cleanup(database.Close)
+		number := strings.Repeat("0", 8<<10)
+		numberHash := sha256.Sum256([]byte(number))
+
+		database.ExpectQuery(`INSERT INTO orders \(number_hash, number, user_id\).*ON CONFLICT \(number_hash\) DO NOTHING.*RETURNING user_id`).
+			WithArgs(numberHash[:], number, int64(42)).
+			WillReturnRows(pgxmock.NewRows([]string{"user_id"}).AddRow(int64(42)))
+
+		ownerID, created, err := (&Store{pool: database}).CreateOrder(context.Background(), 42, number)
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(42), ownerID)
+		assert.True(t, created)
+		require.NoError(t, database.ExpectationsWereMet())
+	})
+
+	t.Run("already exists", func(t *testing.T) {
+		database, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		t.Cleanup(database.Close)
+
+		numberHash := sha256.Sum256([]byte("12345678903"))
+		database.ExpectQuery(`INSERT INTO orders \(number_hash, number, user_id\).*ON CONFLICT \(number_hash\) DO NOTHING.*RETURNING user_id`).
+			WithArgs(numberHash[:], "12345678903", int64(42)).
+			WillReturnError(pgx.ErrNoRows)
+		database.ExpectQuery(`SELECT number, user_id FROM orders WHERE number_hash = \$1`).
+			WithArgs(numberHash[:]).
+			WillReturnRows(pgxmock.NewRows([]string{"number", "user_id"}).AddRow("12345678903", int64(73)))
+
+		ownerID, created, err := (&Store{pool: database}).CreateOrder(context.Background(), 42, "12345678903")
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(73), ownerID)
+		assert.False(t, created)
+		require.NoError(t, database.ExpectationsWereMet())
+	})
+
+	t.Run("hash collision", func(t *testing.T) {
+		database, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		t.Cleanup(database.Close)
+		numberHash := sha256.Sum256([]byte("12345678903"))
+
+		database.ExpectQuery(`INSERT INTO orders \(number_hash, number, user_id\).*ON CONFLICT \(number_hash\) DO NOTHING.*RETURNING user_id`).
+			WithArgs(numberHash[:], "12345678903", int64(42)).
+			WillReturnError(pgx.ErrNoRows)
+		database.ExpectQuery(`SELECT number, user_id FROM orders WHERE number_hash = \$1`).
+			WithArgs(numberHash[:]).
+			WillReturnRows(pgxmock.NewRows([]string{"number", "user_id"}).AddRow("different-number", int64(73)))
+
+		_, _, err = (&Store{pool: database}).CreateOrder(context.Background(), 42, "12345678903")
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "hash collision")
+		require.NoError(t, database.ExpectationsWereMet())
+	})
+}
+
+// Проверяет сохранение контекста ошибок обеих операций с PostgreSQL.
+func TestCreateOrderPropagatesDatabaseErrors(t *testing.T) {
+	databaseErr := errors.New("database unavailable")
+	tests := []struct {
+		name       string
+		expect     func(pgxmock.PgxPoolIface)
+		wantDetail string
+	}{
+		{
+			name: "insert",
+			expect: func(database pgxmock.PgxPoolIface) {
+				numberHash := sha256.Sum256([]byte("12345678903"))
+				database.ExpectQuery(`INSERT INTO orders \(number_hash, number, user_id\).*ON CONFLICT \(number_hash\) DO NOTHING.*RETURNING user_id`).
+					WithArgs(numberHash[:], "12345678903", int64(42)).
+					WillReturnError(databaseErr)
+			},
+			wantDetail: "create order",
+		},
+		{
+			name: "owner lookup",
+			expect: func(database pgxmock.PgxPoolIface) {
+				numberHash := sha256.Sum256([]byte("12345678903"))
+				database.ExpectQuery(`INSERT INTO orders \(number_hash, number, user_id\).*ON CONFLICT \(number_hash\) DO NOTHING.*RETURNING user_id`).
+					WithArgs(numberHash[:], "12345678903", int64(42)).
+					WillReturnError(pgx.ErrNoRows)
+				database.ExpectQuery(`SELECT number, user_id FROM orders WHERE number_hash = \$1`).
+					WithArgs(numberHash[:]).
+					WillReturnError(databaseErr)
+			},
+			wantDetail: "load order owner",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, err := pgxmock.NewPool()
+			require.NoError(t, err)
+			t.Cleanup(database.Close)
+			tt.expect(database)
+
+			_, _, err = (&Store{pool: database}).CreateOrder(context.Background(), 42, "12345678903")
+
+			require.ErrorIs(t, err, databaseErr)
+			assert.ErrorContains(t, err, tt.wantDetail)
 			require.NoError(t, database.ExpectationsWereMet())
 		})
 	}

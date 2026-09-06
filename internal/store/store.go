@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 var (
 	errDatabaseURIRequired = errors.New("database URI is required")
 	errInvalidDatabaseURI  = errors.New("invalid database URI")
+	errOrderHashCollision  = errors.New("order number hash collision")
 )
 
 // Подменный интерфейс для моков в тестах.
@@ -110,4 +112,39 @@ func (s *Store) UserCredentials(ctx context.Context, login string) (int64, strin
 	}
 
 	return userID, passwordHash, true, nil
+}
+
+// Сохраняет номер заказа либо возвращает владельца уже существующего номера.
+func (s *Store) CreateOrder(ctx context.Context, userID int64, number string) (int64, bool, error) {
+	const insertQuery = `
+		INSERT INTO orders (number_hash, number, user_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (number_hash) DO NOTHING
+		RETURNING user_id
+	`
+	// PostgreSQL не сможет поместить длинный TEXT в ключ, поэтому индексируем
+	// фиксированные 32 байта, а исходный номер ниже сверяем после конфликта хеша.
+	numberHash := sha256.Sum256([]byte(number))
+
+	var ownerID int64
+	if err := s.pool.QueryRow(ctx, insertQuery, numberHash[:], number, userID).Scan(&ownerID); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, fmt.Errorf("create order: %w", err)
+		}
+
+		// После разрешения конфликта новый запрос видит владельца победившей вставки.
+		const ownerQuery = `SELECT number, user_id FROM orders WHERE number_hash = $1`
+		var storedNumber string
+		if err := s.pool.QueryRow(ctx, ownerQuery, numberHash[:]).Scan(&storedNumber, &ownerID); err != nil {
+			return 0, false, fmt.Errorf("load order owner: %w", err)
+		}
+		// Сверка исходной строки не позволяет принять коллизию хеша за тот же заказ.
+		if storedNumber != number {
+			return 0, false, errOrderHashCollision
+		}
+
+		return ownerID, false, nil
+	}
+
+	return ownerID, true, nil
 }
