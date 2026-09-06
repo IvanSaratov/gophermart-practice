@@ -176,6 +176,22 @@ func TestRunServerValidatesDatabaseBeforeListener(t *testing.T) {
 	assert.NotContains(t, err.Error(), password)
 }
 
+// Проверяет использование стабильного секрета из окружения без преобразований.
+func TestResolveSigningKeyUsesConfiguredSecret(t *testing.T) {
+	key, err := resolveSigningKey("stable-development-secret")
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("stable-development-secret"), key)
+}
+
+// Проверяет генерацию нового 256-битного ключа при отсутствии конфигурации.
+func TestResolveSigningKeyGeneratesFallback(t *testing.T) {
+	key, err := resolveSigningKey("")
+
+	require.NoError(t, err)
+	assert.Len(t, key, 32)
+}
+
 // Проверяет ненулевой код завершения при неверном CLI-вызове.
 func TestRealMainReturnsFailureForInvalidCLI(t *testing.T) {
 	code := realMain([]string{"gophermart", "--unknown"}, func() (*zap.Logger, error) {

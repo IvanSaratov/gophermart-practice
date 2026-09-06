@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ivansaratov/gophermart-practice/internal/api"
+	"github.com/ivansaratov/gophermart-practice/internal/auth"
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
 	"github.com/ivansaratov/gophermart-practice/internal/store"
 	"github.com/urfave/cli/v3"
@@ -99,20 +100,35 @@ func newCommand(action actionFunc) *cli.Command {
 	}
 }
 
-// Подключает PostgreSQL, собирает операционный API и запускает HTTP-сервер.
+// Подготавливает PostgreSQL и авторизацию, собирает API и запускает HTTP-сервер.
 func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
+	// Отложенный запуск если вдруг миграция не выполниться
 	startupCtx, cancelStartup := context.WithTimeout(ctx, databaseStartupTimeout)
 	database, err := store.Open(startupCtx, cfg.databaseURI)
-	cancelStartup()
 	if err != nil {
+		cancelStartup()
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
+	if err := database.Initialize(startupCtx); err != nil {
+		cancelStartup()
+		return fmt.Errorf("initialize database: %w", err)
+	}
+	cancelStartup()
 
-	logger.Info("Database connection established")
+	logger.Info("Database connection established and initialized")
+
+	signingKey, err := resolveSigningKey(os.Getenv("JWT_SECRET"))
+	if err != nil {
+		return fmt.Errorf("resolve JWT signing key: %w", err)
+	}
+	authentication, err := auth.NewService(database, signingKey)
+	if err != nil {
+		return fmt.Errorf("create authentication service: %w", err)
+	}
 
 	metrics := observability.NewMetrics()
-	handler := api.NewRouter(logger, metrics, database.Ping)
+	handler := api.NewRouter(logger, metrics, database.Ping, authentication)
 	server := newHTTPServer(handler)
 
 	listener, err := net.Listen("tcp", cfg.runAddress)
@@ -129,6 +145,15 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 	logger.Info("HTTP server stopped")
 
 	return nil
+}
+
+// Использует постоянный настроенный секрет либо создаёт случайный ключ для текущего процесса.
+func resolveSigningKey(configuredSecret string) ([]byte, error) {
+	if configuredSecret != "" {
+		return []byte(configuredSecret), nil
+	}
+
+	return auth.GenerateSigningKey()
 }
 
 // Создаёт HTTP-сервер с ограничениями на чтение, запись и простой соединения.
