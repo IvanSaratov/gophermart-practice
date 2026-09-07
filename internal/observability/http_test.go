@@ -48,6 +48,79 @@ func TestHTTPMiddleware(t *testing.T) {
 	assert.Contains(t, metricsResponse.Body.String(), "gophermart_http_request_duration_seconds")
 }
 
+// Проверяет, что неизвестные методы не создают отдельные ряды метрик.
+func TestHTTPMiddlewareBoundsMethodLabels(t *testing.T) {
+	core, logs := observer.New(zapcore.InfoLevel)
+	metrics := NewMetrics()
+	router := chi.NewRouter()
+	router.Use(metrics.Middleware(zap.New(core)))
+	router.Handle("/orders", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	requests := []struct {
+		method     string
+		wantStatus int
+	}{
+		{method: "GET", wantStatus: http.StatusNoContent},
+		{method: "HEAD", wantStatus: http.StatusNoContent},
+		{method: "POST", wantStatus: http.StatusNoContent},
+		{method: "PUT", wantStatus: http.StatusNoContent},
+		{method: "PATCH", wantStatus: http.StatusNoContent},
+		{method: "DELETE", wantStatus: http.StatusNoContent},
+		{method: "CONNECT", wantStatus: http.StatusNoContent},
+		{method: "OPTIONS", wantStatus: http.StatusNoContent},
+		{method: "TRACE", wantStatus: http.StatusNoContent},
+		{method: "CUSTOM1", wantStatus: http.StatusMethodNotAllowed},
+		{method: "CUSTOM2", wantStatus: http.StatusMethodNotAllowed},
+		{method: "CUSTOM1", wantStatus: http.StatusMethodNotAllowed},
+		{method: "get", wantStatus: http.StatusMethodNotAllowed},
+	}
+	for _, request := range requests {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(request.method, "/orders", nil))
+		assert.Equal(t, request.wantStatus, response.Code, request.method)
+	}
+
+	wantCounts := map[string]float64{
+		"GET": 1, "HEAD": 1, "POST": 1, "PUT": 1, "PATCH": 1,
+		"DELETE": 1, "CONNECT": 1, "OPTIONS": 1, "TRACE": 1, "OTHER": 4,
+	}
+	families, err := metrics.registry.Gather()
+	require.NoError(t, err)
+	checkedFamilies := 0
+	for _, family := range families {
+		name := family.GetName()
+		if name != "gophermart_http_requests_total" && name != "gophermart_http_request_duration_seconds" {
+			continue
+		}
+		checkedFamilies++
+		assert.Equal(t, len(wantCounts), len(family.Metric), name)
+		gotCounts := make(map[string]float64)
+		for _, metric := range family.Metric {
+			var method string
+			for _, label := range metric.Label {
+				if label.GetName() == "method" {
+					method = label.GetValue()
+				}
+			}
+			if name == "gophermart_http_requests_total" {
+				gotCounts[method] = metric.GetCounter().GetValue()
+			} else {
+				gotCounts[method] = float64(metric.GetHistogram().GetSampleCount())
+			}
+		}
+		assert.Equal(t, wantCounts, gotCounts, name)
+	}
+	assert.Equal(t, 2, checkedFamilies)
+
+	entries := logs.FilterMessage("HTTP request").All()
+	require.Len(t, entries, len(requests))
+	for i, entry := range entries {
+		assert.Equal(t, requests[i].method, entry.ContextMap()["method"])
+	}
+}
+
 // Проверяет, что panic превращается в HTTP 500 и попадает в лог со stack trace.
 func TestRecoverer(t *testing.T) {
 	core, logs := observer.New(zapcore.ErrorLevel)

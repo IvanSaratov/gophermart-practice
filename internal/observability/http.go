@@ -75,8 +75,16 @@ func (m *Metrics) Middleware(logger *zap.Logger) func(http.Handler) http.Handler
 			}
 			elapsed := time.Since(startedAt)
 
-			m.requestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
-			m.requestDuration.WithLabelValues(r.Method, route).Observe(elapsed.Seconds())
+			method := r.Method
+			switch method {
+			case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+				http.MethodPatch, http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+			default:
+				// Произвольные методы объединяем, чтобы число рядов метрик оставалось ограниченным.
+				method = "OTHER"
+			}
+			m.requestsTotal.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
+			m.requestDuration.WithLabelValues(method, route).Observe(elapsed.Seconds())
 			logger.Info("HTTP request",
 				zap.String("request_id", middleware.GetReqID(r.Context())),
 				zap.String("method", r.Method),
