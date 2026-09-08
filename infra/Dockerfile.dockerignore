@@ -1,0 +1,9 @@
+.git
+.github
+.idea
+.vscode
+docs
+cmd/accrual
+cmd/gophermart/gophermart
+*.out
+*.test
