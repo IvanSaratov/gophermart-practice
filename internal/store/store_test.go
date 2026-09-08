@@ -34,43 +34,6 @@ func TestOpenRejectsInvalidDatabaseURIWithoutExposingPassword(t *testing.T) {
 	assert.NotContains(t, err.Error(), databaseURI)
 }
 
-// Проверяет применение актуального снимка схемы и передачу ошибки PostgreSQL.
-func TestInitializeAppliesSchema(t *testing.T) {
-	tests := []struct {
-		name    string
-		execErr error
-		wantErr bool
-	}{
-		{name: "success"},
-		{name: "database error", execErr: errors.New("schema unavailable"), wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			database, err := pgxmock.NewPool()
-			require.NoError(t, err)
-			t.Cleanup(database.Close)
-
-			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE TABLE IF NOT EXISTS orders.*number_hash BYTEA PRIMARY KEY.*number TEXT NOT NULL.*user_id BIGINT NOT NULL REFERENCES users\(id\),.*status TEXT NOT NULL DEFAULT 'NEW'.*CHECK \(status IN \('NEW', 'PROCESSING', 'INVALID', 'PROCESSED'\)\).*uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE INDEX IF NOT EXISTS orders_user_uploaded_at_idx.*ON orders \(user_id, uploaded_at DESC\)`)
-			if tt.execErr != nil {
-				expected.WillReturnError(tt.execErr)
-			} else {
-				expected.WillReturnResult(pgxmock.NewResult("CREATE", 0))
-			}
-
-			err = (&Store{pool: database}).Initialize(context.Background())
-
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.ErrorContains(t, err, "initialize database schema")
-			} else {
-				require.NoError(t, err)
-			}
-			require.NoError(t, database.ExpectationsWereMet())
-		})
-	}
-}
-
 // Проверяет сохранение нового заказа и определение владельца уже существующего.
 func TestCreateOrderReportsOwnerAndWhetherInsertHappened(t *testing.T) {
 	t.Run("created", func(t *testing.T) {

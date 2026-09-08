@@ -30,7 +30,8 @@ type databasePool interface {
 
 // Владеет пулом соединений с PostgreSQL.
 type Store struct {
-	pool databasePool
+	pool            databasePool
+	migrationConfig *pgx.ConnConfig
 }
 
 // Открывает пул и подтверждает доступность базы до возврата управления.
@@ -57,7 +58,7 @@ func Open(ctx context.Context, databaseURI string) (*Store, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, migrationConfig: config.ConnConfig.Copy()}, nil
 }
 
 // Проверяет доступность PostgreSQL через свободное соединение пула.
@@ -68,15 +69,6 @@ func (s *Store) Ping(ctx context.Context) error {
 // Освобождает все соединения пула при остановке приложения.
 func (s *Store) Close() {
 	s.pool.Close()
-}
-
-// Приводит пустую базу к актуальной.
-func (s *Store) Initialize(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("initialize database schema: %w", err)
-	}
-
-	return nil
 }
 
 // Сохраняет нового пользователя и сообщает, был ли логин свободен.
