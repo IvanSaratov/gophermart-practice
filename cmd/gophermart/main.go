@@ -103,7 +103,7 @@ func newCommand(action actionFunc) *cli.Command {
 
 // Подготавливает PostgreSQL, прикладные сервисы и запускает HTTP-сервер.
 func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
-	// Отложенный запуск если вдруг миграция не выполниться
+	// Ограничиваем подключение и миграции общим контекстом - HTTP запускается только после успеха.
 	startupCtx, cancelStartup := context.WithTimeout(ctx, databaseStartupTimeout)
 	database, err := store.Open(startupCtx, cfg.databaseURI)
 	if err != nil {
