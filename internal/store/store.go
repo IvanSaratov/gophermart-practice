@@ -30,7 +30,8 @@ type databasePool interface {
 
 // Владеет пулом соединений с PostgreSQL.
 type Store struct {
-	pool            databasePool
+	pool databasePool
+	// Нужен чисто для открытия миграции goose, так как она использует другой интерфейс.
 	migrationConfig *pgx.ConnConfig
 }
 
