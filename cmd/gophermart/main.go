@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ivansaratov/gophermart-practice/internal/accrual"
 	"github.com/ivansaratov/gophermart-practice/internal/api"
 	"github.com/ivansaratov/gophermart-practice/internal/auth"
 	"github.com/ivansaratov/gophermart-practice/internal/observability"
@@ -24,6 +25,7 @@ import (
 const (
 	gracefulShutdownTimeout = 10 * time.Second
 	databaseStartupTimeout  = 10 * time.Second
+	accrualRequestTimeout   = 5 * time.Second
 )
 
 type runtimeConfig struct {
@@ -86,9 +88,11 @@ func newCommand(action actionFunc) *cli.Command {
 				Config:   cli.StringConfig{TrimSpace: true},
 			},
 			&cli.StringFlag{
-				Name:    "accrual-system-address",
-				Aliases: []string{"r"},
-				Sources: cli.EnvVars("ACCRUAL_SYSTEM_ADDRESS"),
+				Name:     "accrual-system-address",
+				Required: true,
+				Config:   cli.StringConfig{TrimSpace: true},
+				Aliases:  []string{"r"},
+				Sources:  cli.EnvVars("ACCRUAL_SYSTEM_ADDRESS"),
 			},
 		},
 		Action: func(ctx context.Context, command *cli.Command) error {
@@ -101,8 +105,13 @@ func newCommand(action actionFunc) *cli.Command {
 	}
 }
 
-// Подготавливает PostgreSQL, прикладные сервисы и запускает HTTP-сервер.
+// Подготавливает PostgreSQL и прикладные сервисы, затем запускает HTTP и обработчик начислений.
 func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
+	// Создаем новый экземпляр accrual worker
+	client, err := accrual.NewClient(cfg.accrualSystemAddress, accrualRequestTimeout)
+	if err != nil {
+		return fmt.Errorf("create accrual client: %w", err)
+	}
 	// Ограничиваем подключение и миграции общим контекстом - HTTP запускается только после успеха.
 	startupCtx, cancelStartup := context.WithTimeout(ctx, databaseStartupTimeout)
 	database, err := store.Open(startupCtx, cfg.databaseURI)
@@ -141,7 +150,11 @@ func runServer(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error
 	defer func() { _ = listener.Close() }()
 
 	logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
-	if err := serve(ctx, server, listener, gracefulShutdownTimeout); err != nil {
+	// После старта запускаем наш worker и следим что он с HTTP работает одновременно.
+	worker := accrual.NewWorker(client, database, logger)
+	if err := runRuntime(ctx, worker.Run, func(ctx context.Context) error {
+		return serve(ctx, server, listener, gracefulShutdownTimeout)
+	}); err != nil {
 		return err
 	}
 	logger.Info("HTTP server stopped")
