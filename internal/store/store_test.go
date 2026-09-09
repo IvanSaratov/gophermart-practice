@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v5"
@@ -157,17 +158,31 @@ func TestUserOrdersReturnsNewestFirst(t *testing.T) {
 	}{
 		{
 			name: "orders",
-			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
-				AddRow("12345678903", "PROCESSING", newer).
-				AddRow("9278923470", "NEW", older),
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+				AddRow("12345678903", "PROCESSING", newer, nil).
+				AddRow("9278923470", "NEW", older, nil),
 			want: []order.Order{
 				{Number: "12345678903", Status: order.StatusProcessing, UploadedAt: newer},
 				{Number: "9278923470", Status: order.StatusNew, UploadedAt: older},
 			},
 		},
 		{
+			name: "accrual values",
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+				AddRow("111", "PROCESSED", newer, int64(50050)).
+				AddRow("222", "PROCESSED", older, int64(0)).
+				AddRow("333", "PROCESSED", older, nil).
+				AddRow("444", "INVALID", older, nil),
+			want: []order.Order{
+				{Number: "111", Status: order.StatusProcessed, UploadedAt: newer, Accrual: new(bonus.Amount(50050))},
+				{Number: "222", Status: order.StatusProcessed, UploadedAt: older, Accrual: new(bonus.Amount(0))},
+				{Number: "333", Status: order.StatusProcessed, UploadedAt: older},
+				{Number: "444", Status: order.StatusInvalid, UploadedAt: older},
+			},
+		},
+		{
 			name: "empty",
-			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}),
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}),
 			want: []order.Order{},
 		},
 	}
@@ -177,7 +192,7 @@ func TestUserOrdersReturnsNewestFirst(t *testing.T) {
 			database, err := pgxmock.NewPool()
 			require.NoError(t, err)
 			t.Cleanup(database.Close)
-			database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+			database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 				WithArgs(int64(42)).
 				WillReturnRows(tt.rows)
 
@@ -200,7 +215,7 @@ func TestUserOrdersPropagatesDatabaseErrors(t *testing.T) {
 		{
 			name: "query",
 			expect: func(database pgxmock.PgxPoolIface) {
-				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 					WithArgs(int64(42)).
 					WillReturnError(databaseErr)
 			},
@@ -208,10 +223,10 @@ func TestUserOrdersPropagatesDatabaseErrors(t *testing.T) {
 		{
 			name: "iteration",
 			expect: func(database pgxmock.PgxPoolIface) {
-				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 					WithArgs(int64(42)).
-					WillReturnRows(pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
-						AddRow("12345678903", "NEW", time.Time{}).
+					WillReturnRows(pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+						AddRow("12345678903", "NEW", time.Time{}, nil).
 						RowError(0, databaseErr))
 			},
 		},

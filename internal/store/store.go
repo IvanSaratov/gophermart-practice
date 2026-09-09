@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -148,7 +150,7 @@ func (s *Store) CreateOrder(ctx context.Context, userID int64, number string) (i
 // Возвращает заказы владельца от самых новых к самым старым.
 func (s *Store) UserOrders(ctx context.Context, userID int64) ([]order.Order, error) {
 	const query = `
-		SELECT number, status, uploaded_at
+		SELECT number, status, uploaded_at, accrual
 		FROM orders
 		WHERE user_id = $1
 		ORDER BY uploaded_at DESC
@@ -163,8 +165,12 @@ func (s *Store) UserOrders(ctx context.Context, userID int64) ([]order.Order, er
 	orders := make([]order.Order, 0)
 	for rows.Next() {
 		var item order.Order
-		if err := rows.Scan(&item.Number, &item.Status, &item.UploadedAt); err != nil {
+		var accrual pgtype.Int8
+		if err := rows.Scan(&item.Number, &item.Status, &item.UploadedAt, &accrual); err != nil {
 			return nil, fmt.Errorf("scan user order: %w", err)
+		}
+		if accrual.Valid {
+			item.Accrual = new(bonus.Amount(accrual.Int64))
 		}
 		orders = append(orders, item)
 	}
