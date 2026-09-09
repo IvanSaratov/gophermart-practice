@@ -21,6 +21,7 @@ var (
 
 // Подменный интерфейс для моков в тестах.
 type databasePool interface {
+	Begin(context.Context) (pgx.Tx, error)
 	Ping(context.Context) error
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
