@@ -9,13 +9,15 @@
 
 ## Запуск
 
-Параметр PostgreSQL обязателен. `JWT_SECRET` задаёт постоянный ключ сессий.
+Параметры PostgreSQL и адреса системы начислений обязательны. Адрес начислений
+должен быть HTTP(S) URL. `JWT_SECRET` задаёт постоянный ключ сессий.
 Если он не указан, при запуске генерируется случайный ключ: пользователи
 сохраняются, но после перезапуска им потребуется войти заново. Специально задаем такую логику так как это все таки
 тестовый проект и нету смысла слишком сильно запариваться.
 
 ```sh
 DATABASE_URI='postgresql://gophermart:gophermart@localhost:5432/gophermart?sslmode=disable' \
+ACCRUAL_SYSTEM_ADDRESS='http://localhost:8081' \
 go run ./cmd/gophermart
 ```
 
@@ -65,10 +67,8 @@ curl http://localhost:8080/api/user/orders
 
 ## Проверка
 
-Запустить Compose:
 
 ```sh
-docker compose -f infra/compose.yaml up --build -d
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```
