@@ -65,6 +65,16 @@ curl http://localhost:8080/api/user/orders
 - `GET /ready` — обязательные зависимости готовы;
 - `GET /metrics` — метрики в формате Prometheus.
 
+## Запуск в Compose
+
+```sh
+docker compose -f infra/compose.yaml up --build -d
+```
+
+Стенд запускает Gophermart на порту 8080, accrual на 8081 и отдельную PostgreSQL
+для каждого сервиса. Порты меняются через GOPHERMART_PORT и ACCRUAL_PORT.
+
+
 ## Проверка
 
 

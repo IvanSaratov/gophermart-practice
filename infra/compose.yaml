@@ -15,6 +15,36 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
 
+  postgres-accrual:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: accrual
+      POSTGRES_USER: accrual
+      POSTGRES_PASSWORD: accrual
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - accrual-postgres-data:/var/lib/postgresql
+
+  accrual:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: infra/accrual.Dockerfile
+    command:
+      - "-a"
+      - ":8080"
+      - "-d"
+      - "postgresql://accrual:accrual@postgres-accrual:5432/accrual?sslmode=disable"
+    depends_on:
+      postgres-accrual:
+        condition: service_healthy
+    ports:
+      - "${ACCRUAL_PORT:-8081}:8080"
+
   gophermart:
     build:
       context: ..
@@ -22,13 +52,17 @@ services:
     environment:
       RUN_ADDRESS: ":8080"
       DATABASE_URI: "postgresql://gophermart:gophermart@postgres:5432/gophermart?sslmode=disable"
+      ACCRUAL_SYSTEM_ADDRESS: "http://accrual:8080"
       JWT_SECRET: "${JWT_SECRET:-gophermart-development-secret-change-me}"
     depends_on:
       postgres:
         condition: service_healthy
+      accrual:
+        condition: service_started
     ports:
       - "${GOPHERMART_PORT:-8080}:8080"
     stop_grace_period: 15s
 
 volumes:
+  accrual-postgres-data:
   postgres-data:
