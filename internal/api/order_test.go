@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,4 +169,43 @@ func TestOrderListRequiresAuthentication(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Empty(t, response.Body.String())
 	assert.False(t, orders.listCalled)
+}
+
+// Проверяет точное число баллов в JSON и отличие отсутствующего начисления от нуля.
+func TestOrderListAccrual(t *testing.T) {
+	tests := []struct {
+		name   string
+		status order.Status
+		amount *bonus.Amount
+		want   string
+	}{
+		{name: "new", status: order.StatusNew},
+		{name: "processing", status: order.StatusProcessing},
+		{name: "invalid", status: order.StatusInvalid},
+		{name: "processed without accrual", status: order.StatusProcessed},
+		{name: "zero", status: order.StatusProcessed, amount: new(bonus.Amount(0)), want: "0"},
+		{name: "fraction", status: order.StatusProcessed, amount: new(bonus.Amount(50050)), want: "500.5"},
+		{name: "hundredth", status: order.StatusProcessed, amount: new(bonus.Amount(1)), want: "0.01"},
+		{name: "whole", status: order.StatusProcessed, amount: new(bonus.Amount(4200)), want: "42"},
+		{name: "large exact value", status: order.StatusProcessed, amount: new(bonus.Amount(9223372036854775807)), want: "92233720368547758.07"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orders := &orderServiceStub{listedOrders: []order.Order{{Number: "12345678903", Status: tt.status, Accrual: tt.amount}}}
+			router := newTestRouterWithOrders(authenticationStub{userID: 42}, orders)
+			request := httptest.NewRequest(http.MethodGet, "/api/user/orders", nil)
+			request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "signed-token"})
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			require.Equal(t, http.StatusOK, response.Code)
+			// Читаем исходное JSON-число: float64 мог бы скрыть потерю точности у больших сумм.
+			var body []map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+			require.Len(t, body, 1)
+			assert.Equal(t, tt.want, string(body[0]["accrual"]))
+			assert.Equal(t, `"`+string(tt.status)+`"`, string(body[0]["status"]))
+		})
+	}
 }

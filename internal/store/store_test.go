@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v5"
@@ -32,43 +33,6 @@ func TestOpenRejectsInvalidDatabaseURIWithoutExposingPassword(t *testing.T) {
 	require.ErrorIs(t, err, errInvalidDatabaseURI)
 	assert.NotContains(t, err.Error(), password)
 	assert.NotContains(t, err.Error(), databaseURI)
-}
-
-// Проверяет применение актуального снимка схемы и передачу ошибки PostgreSQL.
-func TestInitializeAppliesSchema(t *testing.T) {
-	tests := []struct {
-		name    string
-		execErr error
-		wantErr bool
-	}{
-		{name: "success"},
-		{name: "database error", execErr: errors.New("schema unavailable"), wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			database, err := pgxmock.NewPool()
-			require.NoError(t, err)
-			t.Cleanup(database.Close)
-
-			expected := database.ExpectExec(`(?s)CREATE TABLE IF NOT EXISTS users.*login TEXT NOT NULL UNIQUE.*password_hash TEXT NOT NULL.*created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE TABLE IF NOT EXISTS orders.*number_hash BYTEA PRIMARY KEY.*number TEXT NOT NULL.*user_id BIGINT NOT NULL REFERENCES users\(id\),.*status TEXT NOT NULL DEFAULT 'NEW'.*CHECK \(status IN \('NEW', 'PROCESSING', 'INVALID', 'PROCESSED'\)\).*uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\).*CREATE INDEX IF NOT EXISTS orders_user_uploaded_at_idx.*ON orders \(user_id, uploaded_at DESC\)`)
-			if tt.execErr != nil {
-				expected.WillReturnError(tt.execErr)
-			} else {
-				expected.WillReturnResult(pgxmock.NewResult("CREATE", 0))
-			}
-
-			err = (&Store{pool: database}).Initialize(context.Background())
-
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.ErrorContains(t, err, "initialize database schema")
-			} else {
-				require.NoError(t, err)
-			}
-			require.NoError(t, database.ExpectationsWereMet())
-		})
-	}
 }
 
 // Проверяет сохранение нового заказа и определение владельца уже существующего.
@@ -194,17 +158,31 @@ func TestUserOrdersReturnsNewestFirst(t *testing.T) {
 	}{
 		{
 			name: "orders",
-			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
-				AddRow("12345678903", "PROCESSING", newer).
-				AddRow("9278923470", "NEW", older),
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+				AddRow("12345678903", "PROCESSING", newer, nil).
+				AddRow("9278923470", "NEW", older, nil),
 			want: []order.Order{
 				{Number: "12345678903", Status: order.StatusProcessing, UploadedAt: newer},
 				{Number: "9278923470", Status: order.StatusNew, UploadedAt: older},
 			},
 		},
 		{
+			name: "accrual values",
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+				AddRow("111", "PROCESSED", newer, int64(50050)).
+				AddRow("222", "PROCESSED", older, int64(0)).
+				AddRow("333", "PROCESSED", older, nil).
+				AddRow("444", "INVALID", older, nil),
+			want: []order.Order{
+				{Number: "111", Status: order.StatusProcessed, UploadedAt: newer, Accrual: new(bonus.Amount(50050))},
+				{Number: "222", Status: order.StatusProcessed, UploadedAt: older, Accrual: new(bonus.Amount(0))},
+				{Number: "333", Status: order.StatusProcessed, UploadedAt: older},
+				{Number: "444", Status: order.StatusInvalid, UploadedAt: older},
+			},
+		},
+		{
 			name: "empty",
-			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at"}),
+			rows: pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}),
 			want: []order.Order{},
 		},
 	}
@@ -214,7 +192,7 @@ func TestUserOrdersReturnsNewestFirst(t *testing.T) {
 			database, err := pgxmock.NewPool()
 			require.NoError(t, err)
 			t.Cleanup(database.Close)
-			database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+			database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 				WithArgs(int64(42)).
 				WillReturnRows(tt.rows)
 
@@ -237,7 +215,7 @@ func TestUserOrdersPropagatesDatabaseErrors(t *testing.T) {
 		{
 			name: "query",
 			expect: func(database pgxmock.PgxPoolIface) {
-				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 					WithArgs(int64(42)).
 					WillReturnError(databaseErr)
 			},
@@ -245,10 +223,10 @@ func TestUserOrdersPropagatesDatabaseErrors(t *testing.T) {
 		{
 			name: "iteration",
 			expect: func(database pgxmock.PgxPoolIface) {
-				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
+				database.ExpectQuery(`(?s)SELECT number, status, uploaded_at, accrual.*FROM orders.*WHERE user_id = \$1.*ORDER BY uploaded_at DESC`).
 					WithArgs(int64(42)).
-					WillReturnRows(pgxmock.NewRows([]string{"number", "status", "uploaded_at"}).
-						AddRow("12345678903", "NEW", time.Time{}).
+					WillReturnRows(pgxmock.NewRows([]string{"number", "status", "uploaded_at", "accrual"}).
+						AddRow("12345678903", "NEW", time.Time{}, nil).
 						RowError(0, databaseErr))
 			},
 		},

@@ -9,13 +9,15 @@
 
 ## Запуск
 
-Параметр PostgreSQL обязателен. `JWT_SECRET` задаёт постоянный ключ сессий.
+Параметры PostgreSQL и адреса системы начислений обязательны. Адрес начислений
+должен быть HTTP(S) URL. `JWT_SECRET` задаёт постоянный ключ сессий.
 Если он не указан, при запуске генерируется случайный ключ: пользователи
 сохраняются, но после перезапуска им потребуется войти заново. Специально задаем такую логику так как это все таки
 тестовый проект и нету смысла слишком сильно запариваться.
 
 ```sh
 DATABASE_URI='postgresql://gophermart:gophermart@localhost:5432/gophermart?sslmode=disable' \
+ACCRUAL_SYSTEM_ADDRESS='http://localhost:8081' \
 go run ./cmd/gophermart
 ```
 
@@ -63,12 +65,20 @@ curl http://localhost:8080/api/user/orders
 - `GET /ready` — обязательные зависимости готовы;
 - `GET /metrics` — метрики в формате Prometheus.
 
-## Проверка
-
-Запустить Compose:
+## Запуск в Compose
 
 ```sh
 docker compose -f infra/compose.yaml up --build -d
+```
+
+Стенд запускает Gophermart на порту 8080, accrual на 8081 и отдельную PostgreSQL
+для каждого сервиса. Порты меняются через GOPHERMART_PORT и ACCRUAL_PORT.
+
+
+## Проверка
+
+
+```sh
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```

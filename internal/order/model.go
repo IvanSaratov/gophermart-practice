@@ -1,6 +1,10 @@
 package order
 
-import "time"
+import (
+	"time"
+
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
+)
 
 // Состояние обработки заказа.
 type Status string
@@ -18,4 +22,5 @@ type Order struct {
 	Number     string
 	Status     Status
 	UploadedAt time.Time
+	Accrual    *bonus.Amount
 }

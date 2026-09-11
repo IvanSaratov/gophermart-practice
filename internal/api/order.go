@@ -26,9 +26,10 @@ type orderHandlers struct {
 }
 
 type orderResponse struct {
-	Number     string       `json:"number"`
-	Status     order.Status `json:"status"`
-	UploadedAt time.Time    `json:"uploaded_at"`
+	Number     string          `json:"number"`
+	Status     order.Status    `json:"status"`
+	UploadedAt time.Time       `json:"uploaded_at"`
+	Accrual    json.RawMessage `json:"accrual,omitzero"`
 }
 
 // Принимает номер и переводит доменный результат в статус.
@@ -95,10 +96,16 @@ func (h orderHandlers) listOrders(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]orderResponse, 0, len(orders))
 	for _, item := range orders {
+		var accrual json.RawMessage
+		if item.Accrual != nil {
+			// nil убирает поле, а "0" сохраняет ноль.
+			accrual = json.RawMessage(item.Accrual.String())
+		}
 		response = append(response, orderResponse{
 			Number:     item.Number,
 			Status:     item.Status,
 			UploadedAt: item.UploadedAt,
+			Accrual:    accrual,
 		})
 	}
 

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ivansaratov/gophermart-practice/internal/bonus"
 	"github.com/ivansaratov/gophermart-practice/internal/order"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +23,7 @@ var (
 
 // Подменный интерфейс для моков в тестах.
 type databasePool interface {
+	Begin(context.Context) (pgx.Tx, error)
 	Ping(context.Context) error
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -31,6 +34,8 @@ type databasePool interface {
 // Владеет пулом соединений с PostgreSQL.
 type Store struct {
 	pool databasePool
+	// Нужен чисто для открытия миграции goose, так как она использует другой интерфейс.
+	migrationConfig *pgx.ConnConfig
 }
 
 // Открывает пул и подтверждает доступность базы до возврата управления.
@@ -57,7 +62,7 @@ func Open(ctx context.Context, databaseURI string) (*Store, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, migrationConfig: config.ConnConfig.Copy()}, nil
 }
 
 // Проверяет доступность PostgreSQL через свободное соединение пула.
@@ -68,15 +73,6 @@ func (s *Store) Ping(ctx context.Context) error {
 // Освобождает все соединения пула при остановке приложения.
 func (s *Store) Close() {
 	s.pool.Close()
-}
-
-// Приводит пустую базу к актуальной.
-func (s *Store) Initialize(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("initialize database schema: %w", err)
-	}
-
-	return nil
 }
 
 // Сохраняет нового пользователя и сообщает, был ли логин свободен.
@@ -154,7 +150,7 @@ func (s *Store) CreateOrder(ctx context.Context, userID int64, number string) (i
 // Возвращает заказы владельца от самых новых к самым старым.
 func (s *Store) UserOrders(ctx context.Context, userID int64) ([]order.Order, error) {
 	const query = `
-		SELECT number, status, uploaded_at
+		SELECT number, status, uploaded_at, accrual
 		FROM orders
 		WHERE user_id = $1
 		ORDER BY uploaded_at DESC
@@ -169,8 +165,12 @@ func (s *Store) UserOrders(ctx context.Context, userID int64) ([]order.Order, er
 	orders := make([]order.Order, 0)
 	for rows.Next() {
 		var item order.Order
-		if err := rows.Scan(&item.Number, &item.Status, &item.UploadedAt); err != nil {
+		var accrual pgtype.Int8
+		if err := rows.Scan(&item.Number, &item.Status, &item.UploadedAt, &accrual); err != nil {
 			return nil, fmt.Errorf("scan user order: %w", err)
+		}
+		if accrual.Valid {
+			item.Accrual = new(bonus.Amount(accrual.Int64))
 		}
 		orders = append(orders, item)
 	}

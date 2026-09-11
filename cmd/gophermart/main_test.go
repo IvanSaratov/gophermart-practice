@@ -25,10 +25,11 @@ func TestCommandConfiguration(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			args: []string{"-d", "postgres://required"},
+			args: []string{"-d", "postgres://required", "-r", "http://accrual"},
 			want: runtimeConfig{
-				runAddress:  "localhost:8080",
-				databaseURI: "postgres://required",
+				runAddress:           "localhost:8080",
+				databaseURI:          "postgres://required",
+				accrualSystemAddress: "http://accrual",
 			},
 		},
 		{
@@ -167,8 +168,9 @@ func TestServeReturnsListenerError(t *testing.T) {
 func TestRunServerValidatesDatabaseBeforeListener(t *testing.T) {
 	const password = "top-secret-password"
 	err := runServer(context.Background(), runtimeConfig{
-		runAddress:  "127.0.0.1:-1",
-		databaseURI: "postgres://gophermart:" + password + "@localhost:not-a-port/gophermart",
+		runAddress:           "127.0.0.1:-1",
+		databaseURI:          "postgres://gophermart:" + password + "@localhost:not-a-port/gophermart",
+		accrualSystemAddress: "http://accrual",
 	}, zap.NewNop())
 
 	require.Error(t, err)
@@ -223,4 +225,21 @@ func unsetEnv(t *testing.T, key string) {
 		}
 		require.NoError(t, os.Unsetenv(key))
 	})
+}
+
+// Проверяет обязательность адреса начислений до вызова приложения.
+func TestCommandRequiresAccrualAddress(t *testing.T) {
+	unsetEnv(t, "ACCRUAL_SYSTEM_ADDRESS")
+	called := false
+	command := newCommand(func(context.Context, runtimeConfig) error { called = true; return nil })
+	require.Error(t, command.Run(context.Background(), []string{"gophermart", "-d", "postgres://required"}))
+	require.False(t, called)
+}
+
+// Проверяет адрес accrual до обращения к БД.
+func TestRunServerValidatesAccrualAddress(t *testing.T) {
+	for _, address := range []string{"", "   ", "ftp://accrual", "http://"} {
+		err := runServer(context.Background(), runtimeConfig{databaseURI: "invalid", accrualSystemAddress: address}, zap.NewNop())
+		require.ErrorContains(t, err, "create accrual client")
+	}
 }
